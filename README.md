@@ -8,6 +8,7 @@
 
 - [Overview](#overview)
 - [Installation](#installation)
+- [Code Structure](#code-structure)
 - [Results](#results)
 
 ---
@@ -25,15 +26,37 @@ Follow these steps to set up the project on your local machine:
 1. Clone the repository
 2. cd to your repo directory
 3. Run the setup script to create and activate a virtual environment, install dependencies, and run the application:
+
 `chmod +x setup_and_run.sh`
+
 `./setup_and_run.sh`
+
+---
+
+## Code Structure
+
+Root folder:  
+├── src/  
+│   ├── main.py: Main file to run the baseline and new VRP algorithm in the paper.  
+│   ├── VRPTWSolver.py: Implementation of the two-index baseline MILP in Section 3.3.  
+│   ├── LADiscretizationAlgo.py: Implementation of the new VRP Algorithm 1 in the paper.  
+│   ├── VRPTWSolverAlgo.py: Implementation of the new compact VRP model in Section 4.3. Used in LADiscretizationAlgo.  
+│   ├── FlowGraphCapacity.py: Capacity/Time window discretization in Section 4.2 and 5.1.   
+│   ├── LocalAreaArcs.py: Local area neighborhood implementation in Section 4.1, 4.5.2, and 5.2.   
+│   ├── dataLoader.py: Load Solomon benchmark data set.  
+│   ├── VRPTWInstance.py: Store dataset loaded by dataLoader as an instance and to be used by algorithms.  
+│   ├── Util.py: Helper functions.  
+│   └── dataset/: Store some Solomon benchmark dataset from http://www.vrp-rep.org/datasets.html.  
+├── README.md  
+├── requirements.txt  
+└── setup_and_run.sh: Shell file to install packages and run.  
 
 ---
 
 ## Example Results
 
-Let's mainly focus on the ILP objective, ILP time, and total LP time. The LP Obj and MIP Dual Bound may need further check.
-The ILP Obj are very close to the appendix of the paper. Tiny difference might be from rounding errors.
+Let's mainly focus on the ILP objective, ILP time, and total LP time. The LP Obj and MIP Dual Bound may need further check.  
+The ILP Obj are very close to the appendix of the paper. Tiny difference might be from rounding errors.  
 Next step improvement: Gurobi model creation time; faster convergence method.
 
 | File Num   | Approach       | LP Obj   | MIP Dual Bound | ILP Obj   | ILP Time   | Total LP Time | Total Run Time  |
