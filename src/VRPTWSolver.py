@@ -186,7 +186,7 @@ class VRPTWSolver:
         if where == GRB.Callback.MIPNODE:  # MIP node callback
             if model.cbGet(GRB.Callback.MIPNODE_STATUS) == GRB.OPTIMAL:
                 # Get the LP relaxation objective at the root node
-                lp_obj = model.cbGet(GRB.Callback.MIPNODE_OBJBST)
+                lp_obj = model.cbGet(GRB.Callback.MIPNODE_OBJBND)   # Correction: not MIPNODE_OBJBST
                 # Store it if it's the root node
                 if not hasattr(model, "_lp_relax_obj"):
                     model._lp_relax_obj = lp_obj  # Save to the model
@@ -205,13 +205,30 @@ class VRPTWSolver:
         self.model.setParam('OutputFlag', 0)    # Disable gurobi output
 
         """Solve the VRPTW model."""
-        self.model.optimize(lambda m, where: self.lp_relaxation_callback(m, where))
+        self.model.optimize()
         self.solve_status()
         # Get the solve time
         self.solve_time = self.model.Runtime
         self.mip_dual_bound = self.model.ObjBound
-        # Retrieve the LP relaxation objective
-        self.lp_relaxation_obj = getattr(self.model, "_lp_relax_obj", None)
+
+    def get_lp_obj(self):
+        """ Get lp obj of the baseline MILP: 
+            Method 1. use lp_relaxation_callback:
+                self.model.optimize(lambda m, where: self.lp_relaxation_callback(m, where))
+                self.lp_relaxation_obj = getattr(self.model, "_lp_relax_obj", None)
+            Method 2. relax the model and solve again.
+                self.model = self.model.relax()
+                self.model.optimize()
+            Method 3. Retrive Root relaxation: objective from Gurobi log.
+                Not implemented for now.
+            These values have a small gap because Method 1 and 3 are getting the root relaxation objective of the MILP, 
+            while this relaxation after presolve would be slightly different from the LP relaxation, 
+            see https://support.gurobi.com/hc/en-us/community/posts/360077249052-Root-relaxation-objective-value-is-different-from-the-objective-value-from-continuous-model.
+            For now I use Method 2 to make sure getting the accurate LP relaxation objective. We can switch to Method 1 instead as well.
+        """
+        self.relaxed_model = self.model.relax()
+        self.relaxed_model.optimize()
+        self.lp_relaxation_obj = self.relaxed_model.ObjVal
 
     def solve_status(self):
         if self.model.status == GRB.OPTIMAL:

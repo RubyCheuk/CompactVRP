@@ -21,6 +21,10 @@ def main_baseline(instance):
     
     # Extract and print the solution
     solution = solver.extract_solution()
+
+    # Solve the lp relaxation
+    solver.get_lp_obj() # Notice that solver.model has been relaxed, not MILP any more.
+
     """ 
     if solution:
         print("Optimal Routes:", solution["routes"])
@@ -29,6 +33,7 @@ def main_baseline(instance):
     else:
         print("No feasible solution found!")
     """
+
     return {
         "lp_obj": solver.lp_relaxation_obj,
         "mip_dual_bound": solver.mip_dual_bound,
@@ -60,12 +65,12 @@ if __name__ == "__main__":
 
     '''Load the Solomon dataset'''
     # TODO: add a wrapper to automate all data instances
-    dataset_file_path = "src/dataset/solomon-1987-r1/R105_050.xml"  # Replace with other dataset file path
+    dataset_file_path = "src/dataset/solomon-1987-r1/R101_050.xml"  # Replace with other dataset file path
     loader = SolomonDatasetLoader(dataset_file_path)
     instance = loader.load_instance()
 
     baseline_results = main_baseline(instance)  # Baseline MILP
     compact_results = main_compactVRP(instance) # VRPTW algorithm in the paper
-
+    
     # TODO: save output as files
     print_comparison_table(dataset_file_path, baseline_results, compact_results)
