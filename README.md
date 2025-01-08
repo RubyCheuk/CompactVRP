@@ -9,7 +9,7 @@
 - [Overview](#overview)
 - [Installation](#installation)
 - [Code Structure](#code-structure)
-- [Results](#results)
+- [Example Results](#example-results)
 
 ---
 
