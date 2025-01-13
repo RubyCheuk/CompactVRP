@@ -10,11 +10,11 @@ Description:
 from VRPTWSolver import VRPTWSolver  # Assuming the class is saved in a file named vrptw_solver.py
 from FlowGraphCapacity import FlowGraphCapacityTime
 from LocalAreaArcs import LocalAreaArcs
-import ast
+import ast, time
 
 class VRPTWSolverAlgo(VRPTWSolver):
     """Solver for the MILP model in Section 4.3."""
-    def __init__(self, instance, N_u, WD_u, WT_u, lp_relaxation=True):
+    def __init__(self, instance, N_u, WD_u, WT_u, var_basis, con_basis, lp_relaxation=True):
         super().__init__(instance)  # Inherit initialization from VRPTWSolver
         self.N_u = N_u
         self.WD_u = WD_u
@@ -28,6 +28,8 @@ class VRPTWSolverAlgo(VRPTWSolver):
         self.capacity_pi = {}
         self.time_pi = {}
         self.LA_pi = {}
+        self.var_basis = var_basis
+        self.con_basis = con_basis
 
     def setup_variables(self):
         """Override to add constraints specific to Section 4.3."""
@@ -175,34 +177,30 @@ class VRPTWSolverAlgo(VRPTWSolver):
         """
         step_size = 1 if type=='capacity' else 0.0001
         data_dict = self.WD_u if type == 'capacity' else self.WT_u
-        #print ('dual grou: ', dual_groups, type)
+        edge_set = set(self.capacity_E_graph if type == 'capacity' else self.time_E_graph)
         
         for u, pi_dict in dual_groups.items():
+            customer_data = data_dict.get(u, set())  # Cache customer-specific data
+
             for pi_val, node_list in pi_dict.items():
                 # Sort by node[1], i.e., d_min
                 node_list.sort(key=lambda x: x[1])
 
                 # Loop over consecutive pairs
-                for i in range(len(node_list) - 1):
-                    node_i = node_list[i]
-                    node_j = node_list[i + 1]
+                for node_current, node_next in zip(node_list, node_list[1:]):
+                    # Extract d_max and d_min
+                    d_max_current = node_current[2]
+                    d_min_next = node_next[1]
 
-                    if type == 'capacity' and (node_i, node_j) not in self.capacity_E_graph:
-                        #print ((node_i, node_j), 'not in self.capacity_E_graph')
+                    # Ensure the pair exists in the graph
+                    if (node_current, node_next) not in edge_set:
                         continue
-                    if type != 'capacity' and (node_i, node_j) not in self.time_E_graph:
-                        #print ((node_i, node_j), 'not in self.time_E_graph')
-                        continue
-
-                    # node_i = (u, d_min_i, d_max_i)
-                    # node_j = (u, d_min_j, d_max_j)
-                    d_max_i = node_i[2]
-                    d_min_j = node_j[1]
-
-                    if d_max_i + step_size == d_min_j:
+                    if d_max_current + step_size == d_min_next:
                         # Remove d_max_i from self.WD_u[u] if present
-                        if d_max_i in data_dict[u]:
-                            data_dict[u].remove(d_max_i)
+                        if d_max_current in customer_data:
+                            customer_data.remove(d_max_current)
+            # Update the original data_dict for this customer
+            data_dict[u] = customer_data
 
     def get_positive_z_capacity_time(self, type='capacity'):
         """
@@ -283,10 +281,28 @@ class VRPTWSolverAlgo(VRPTWSolver):
 
     def solve(self):    
         """Solve the VRPTW model."""
+        self.model.setParam('TimeLimit', 1000)  # Set the time limit to 300 seconds (5 minutes)
         if self.lp_relaxation:
             self.model = self.model.relax()
-        self.model.setParam('TimeLimit', 1000)  # Set the time limit to 300 seconds (5 minutes)
-        self.model.setParam('OutputFlag', 0)    # Disable gurobi output
+            self.model.setParam('OutputFlag', 0)    # Disable gurobi output
+        else:
+            if True:    # Use the basis from the previous iteration to accelerate the solving process
+                start_time = time.time()
+                if self.var_basis and self.con_basis:
+                    # Set the basis status for variables
+                    var_dict = {var.varName: var for var in self.model.getVars()}
+                    for var_name, basis in self.var_basis.items():
+                        if var_name in var_dict:
+                            var_dict[var_name].vBasis = basis
+
+                    # Set the basis status for constraints
+                    constr_dict = {con.ConstrName: con for con in self.model.getConstrs()}
+                    for constr_name, basis in self.con_basis.items():
+                        if constr_name in constr_dict:
+                            constr_dict[constr_name].cBasis = basis
+                end_time = time.time()  # End time
+                print(f"-----start_with_basis-----Runtime: {end_time - start_time:.4f} seconds")
+
         self.model.optimize()
         self.solve_status()
 
@@ -295,4 +311,9 @@ class VRPTWSolverAlgo(VRPTWSolver):
             self.capacity_pi = self.fetch_duals_capacity_time()
             self.time_pi = self.fetch_duals_capacity_time('time')
             self.LA_pi = self.store_positive_duals_for_ku()
-        
+            if True:    # Save variable and constraint basis from the previous model
+                start_time = time.time()
+                self.variable_basis = {var.varName: var.vBasis for var in self.model.getVars()}
+                self.constraint_basis = {constr.ConstrName: constr.cBasis for constr in self.model.getConstrs()}
+                end_time = time.time()  # End time
+                print(f"-----save_basis-----Runtime: {end_time - start_time:.4f} seconds")

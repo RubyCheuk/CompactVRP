@@ -30,7 +30,8 @@ class LADiscretization:
         self.min_inc = min_inc
         self.iter_max = iter_max
         self.zeta = zeta
-
+        self.variable_basis = None
+        self.constraint_basis = None
         # Initialize parameterizations
 
         # Local area neighbors
@@ -64,23 +65,27 @@ class LADiscretization:
         Line 8: Solve the current LP relaxation and update the parameterization. relaxation = True.
         Line 21: Solve the current LP relaxation and update the parameterization. relaxation = False.
         """
-        solver = VRPTWSolverAlgo(self.instance, self.N_u, self.WD_u, self.WT_u, relaxation)
+        solver = VRPTWSolverAlgo(self.instance, self.N_u, self.WD_u, self.WT_u, self.variable_basis, self.constraint_basis, relaxation)
+        start_time = time.time()
         solver.create_model()
+        end_time = time.time()  # End time
+        print(f"-----create_model-----Runtime: {end_time - start_time:.4f} seconds")
         solver.solve()
-
+        start_time = time.time()
+        print(f"-----solve_model-----Runtime: {-end_time + start_time:.4f} seconds")
         lp_objective = solver.model.ObjVal
         mip_dual_bound = solver.model.ObjBound   # To get the MIP dual bound of the MILP? TODO: need to further check if the usage is correct.
 
         # Get the solve time
         solve_time = solver.model.Runtime  
-        return lp_objective, solve_time, solver, mip_dual_bound
+        return lp_objective, solve_time, solver, mip_dual_bound, getattr(solver, "variable_basis", None), getattr(solver, "constraint_basis", None)
 
     def contract_parameters(self, solver):
         """
         Contract parameters (LA-neighbors, time/capacity buckets) for parsimony.
         Used in Lines 10-12 in Algorithm 1.
         """
-
+        start_time = time.time()
         # Set N_u based on k_u based on (10) in Section 5.2.
         for u in range(1, self.instance.num_customers + 1):
             if u in solver.LA_pi:
@@ -92,10 +97,16 @@ class LADiscretization:
             else:
                 # If u does not exist in LA_pi, set self.N_u[u] as an empty list
                 self.N_u[u] = []
+        end_time = time.time()  # End time
+        print(f"------contract_parameters_LAarcs-----Runtime: {end_time - start_time:.4f} seconds")
 
         # Apply contraction logic for WD_u, WT_u in Section 5.1.
         solver.post_process_duals(solver.capacity_pi)
+        start_time = time.time()  # End time
+        print(f"------contract_parameters_cap-----Runtime: {-end_time + start_time:.4f} seconds")
         solver.post_process_duals(solver.time_pi, 'time')
+        end_time = time.time()  # End time
+        print(f"------contract_parameters_time-----Runtime: {end_time - start_time:.4f} seconds")
 
     def expand_parameters(self, lp_solver):
         """Expand parameters (time/capacity buckets) for sufficiency."""
@@ -128,7 +139,7 @@ class LADiscretization:
         """Execute Algorithm 1: LA-Discretization algorithm."""
 
         self.lp_time = 0
-        
+        self.total_iters = 0
         while True:
             self.is_parameterized_unchanged = True
 
@@ -139,13 +150,14 @@ class LADiscretization:
                 self.is_parameterized_unchanged = False
 
             # Line 8: given N_u, T_u, D_u for all u \in N, solve the LP relaxation and get [z, y, x, pi, lp_objective]
-            lp_objective, lp_time, lp_solver, _ = self.solve_lp_relaxation()
+            lp_objective, lp_time, lp_solver, _, self.variable_basis, self.constraint_basis = self.solve_lp_relaxation()
             self.lp_time += lp_time
-            
+            self.total_iters += 1
+
             print ('---------')
-            print ('-----iteration-------', self.iter_since_reset)
+            print ('-----iteration-------', self.iter_since_reset, self.total_iters)
             print ('---lp_objective > self.last_lp_val + self.min_inc: ', lp_objective, self.last_lp_val, self.min_inc)
-            
+            print ('---------')
             if lp_objective > self.last_lp_val + self.min_inc:
                 # Lines 10-12: Contract parameters for parsimony
                 self.contract_parameters(lp_solver)
@@ -167,11 +179,12 @@ class LADiscretization:
         self.contract_parameters(lp_solver)
 
         # Line 21: Solve final MILP using the parameterized LP
+        print ('-----solve_final_milp-------')
         final_obj, ilp_time, mip_dual_bound = self.solve_final_milp()
         return final_obj, ilp_time, lp_objective, mip_dual_bound
 
     def solve_final_milp(self):
         """Solve the final MILP with the generated parameterization."""
-        lp_objective, ilp_time, _, mip_dual_bound = self.solve_lp_relaxation(False)
+        lp_objective, ilp_time, _, mip_dual_bound, _, _ = self.solve_lp_relaxation(False)
         return lp_objective, ilp_time, mip_dual_bound
 

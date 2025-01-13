@@ -37,18 +37,51 @@ def calculate_neighbors(instance, k_neighbors, u):
     # Select the top-k neighbors
     return [v for v, _ in neighbors[:k_neighbors]]
 
+def safe_round(value, precision=4):
+    if isinstance(value, (int, float)):
+        return round(value, precision)
+    return value  # Return as-is if not numeric
+
 def print_comparison_table(file_path, baseline_results, compact_results):
     # Extract the file number from the dataset file path
     file_num = file_path.split("/")[-1].split(".")[0]
 
+    # Define default values for empty baseline_results
+    default_values = {
+        "lp_obj": "N/A",
+        "mip_dual_bound": "N/A",
+        "ilp_obj": "N/A",
+        "ilp_time": "N/A",
+        "total_lp_time": "N/A",
+        "run_time": "N/A",
+    }
+    if not baseline_results:
+        baseline_results = default_values
+
     # Prepare data for the table
     data = [
-        [file_num, "OUR APPROACH", compact_results["lp_obj"], compact_results["mip_dual_bound"], compact_results["ilp_obj"], compact_results["ilp_time"],compact_results["total_lp_time"],compact_results["run_time"]],
-        [file_num, "BASELINE MILP", baseline_results["lp_obj"], baseline_results["mip_dual_bound"], baseline_results["ilp_obj"], baseline_results["ilp_time"],baseline_results["total_lp_time"],baseline_results["run_time"]]
+        [
+            file_num, "OUR APPROACH",
+            safe_round(compact_results.get("lp_obj", "N/A")),
+            safe_round(compact_results.get("mip_dual_bound", "N/A")),
+            safe_round(compact_results.get("ilp_obj", "N/A")),
+            safe_round(compact_results.get("ilp_time", "N/A")),
+            safe_round(compact_results.get("total_lp_time", "N/A")),
+            safe_round(compact_results.get("run_time", "N/A")),
+        ],
+        [
+            file_num, "BASELINE MILP",
+            safe_round(baseline_results.get("lp_obj", "N/A")),
+            safe_round(baseline_results.get("mip_dual_bound", "N/A")),
+            safe_round(baseline_results.get("ilp_obj", "N/A")),
+            safe_round(baseline_results.get("ilp_time", "N/A")),
+            safe_round(baseline_results.get("total_lp_time", "N/A")),
+            safe_round(baseline_results.get("run_time", "N/A")),
+        ]
     ]
 
     # Define table headers
     headers = ["file num", "approach", "lp obj", "mip dual bound",  "ILP obj", "ilp time", "total lp time", "total run time"]
 
     # Print the table
-    print(tabulate(data, headers=headers, tablefmt="grid"))
+    print(tabulate(data, headers=headers, tablefmt="github"))

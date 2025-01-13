@@ -8,6 +8,8 @@ Description:
 
 import gurobipy as gp
 from gurobipy import GRB
+import time
+from collections import defaultdict
 
 class FlowGraphCapacityTime():
     """ Use the same class for capacity and time. Use "type" to denote which constraint to add. """
@@ -61,6 +63,12 @@ class FlowGraphCapacityTime():
 
         edges = []
 
+        # Precompute nodes grouped by customer ID for efficient lookups
+        nodes_by_customer = defaultdict(list)
+        for node in self.G_graph:
+            if node[0] > 0:  # Skip depot nodes
+                nodes_by_customer[node[0]].append(node)
+
         # Add edges from (alpha, 1) to (u, |D_u|) and from (u, 1) to (alpha_bar, 1)
         for node in self.G_graph:
             if node[0] <= 0:  # Skip the starting and ending depot
@@ -80,60 +88,49 @@ class FlowGraphCapacityTime():
                 edges.append(((0, self.ub, self.ub), node))  
 
         # Add edges for (u, k) to (u, k-1)
-        for node in self.G_graph:
-            if node[0] <= 0:  # Skip the starting and ending depot
-                continue
+        for u, nodes in nodes_by_customer.items():
+            nodes.sort(key=lambda n: n[1])  # Sort nodes by d_min for efficient pairing
+            for i, node in enumerate(nodes):
+                for prev_node in nodes[:i]:  # Only look at previous nodes
+                    if node[1] == prev_node[2] + self.step_size:
+                        edges.append((node, prev_node))
 
-            u, d_min, d_max = node
 
-            # Look for other nodes in self.G_graph with the same customer (u)
-            for other_node in filter(lambda n: n[0] == u, self.G_graph):
-                _, _, d_max_other = other_node
-
-                # Add self-loops for capacity reduction (u, k -> u, k-1)
-                if d_min == d_max_other + self.step_size:
-                    edges.append((node, other_node))
-
-                    
         # Add edges for (u, k) to (v, m) based on capacity/time window conditions
-        for i in self.G_graph:
-            u, d_min_u, d_max_u = i
-            
-            # Skip the starting and ending depot
-            if u <= 0:
-                continue
+        for u, nodes_u in nodes_by_customer.items():
+            for v, nodes_v in nodes_by_customer.items():
+                if u == v:
+                    continue  # Skip self-loops for different customers
 
-            if self.type == 'capacity':
-                d_u = demands[u-1]# Demand
+                for i in nodes_u:
+                    d_min_u, d_max_u = i[1], i[2]
 
-            for j in filter(lambda n: n[0] > 0 and n[0] != u, self.G_graph):  # Filter only valid target nodes: u != v
-                v, d_min_v, d_max_v = j
+                    for j in nodes_v:
+                        d_min_v, d_max_v = j[1], j[2]
 
-                if self.type != 'capacity': # i.e., type == 'time'
-                    """ 
-                    A vehicle leaves ui with time remaining in between t−_i and t+_i and leaves at uj with time remaining between t−_j and t+_j.
-                    TODO: need clarification here: discrepancy of discription of t- and t+.
-                    1) Section 3.3 says t-, t+ are the amount of time remaining when service starts at customer u. 
-                    2) Section 4.2 uses them as the amount of time remaining when leaving customer u.
-                    My implementation here follows:
-                    Based on t+_i - d_u >= t-_j, the largest remaining time when leaving ui - earliest remaining time when leaving uj >= travel time + service time at uj.
-                    """
-                    d_u = round(self.instance.compute_distance(customers[u-1], customers[v-1]) + service_times[v - 1], 1)
+                        if self.type == 'capacity':
+                            d_u = demands[u - 1]
+                        else:  # Time condition
+                            """ 
+                            A vehicle leaves ui with time remaining in between t−_i and t+_i and leaves at uj with time remaining between t−_j and t+_j.
+                            TODO: need clarification here: discrepancy of discription of t- and t+.
+                            1) Section 3.3 says t-, t+ are the amount of time remaining when service starts at customer u. 
+                            2) Section 4.2 uses them as the amount of time remaining when leaving customer u.
+                            My implementation here follows:
+                            Based on t+_i - d_u >= t-_j, the largest remaining time when leaving ui - earliest remaining time when leaving uj >= travel time + service time at uj.
+                            """
+                            d_u = round(self.instance.compute_distance(customers[u - 1], customers[v - 1]) + service_times[v - 1], 1)
 
-                # Check capacity conditions
-                if d_max_u - d_u >= d_min_v:  # d^+_i - d_u >= d^-_j
-                    # Additional condition for k > 1
-                    if d_min_u > self.W_u[u][0] and d_min_v > d_min_u - self.step_size - d_u:
-                        edges.append((i, j))
-                    elif d_min_u == self.W_u[u][0]:  # Case where k = 1
-                        edges.append((i, j))
+                        if d_max_u - d_u >= d_min_v:
+                            if d_min_u > self.W_u[u][0] and d_min_v > d_min_u - self.step_size - d_u:
+                                edges.append((i, j))
+                            elif d_min_u == self.W_u[u][0]:
+                                edges.append((i, j))
+
         return edges
 
     def setup_variables(self):
-        if self.type == "capacity":
-            prefix = "z_D"
-        else:
-            prefix = "z_T"
+        prefix = "z_D" if self.type == "capacity" else "z_T"
 
         self.z = self.model.addVars(
             self.E_graph, lb=0, vtype=GRB.CONTINUOUS, name=prefix
@@ -143,19 +140,27 @@ class FlowGraphCapacityTime():
         """
         Add constraints (4a) and (4b).
         """
+        # Precompute incoming and outgoing edges for each node
+        incoming_edges = defaultdict(list)
+        outgoing_edges = defaultdict(list)
+        uv_to_edges = defaultdict(list)
+
+        for i, j in self.E_graph:
+            incoming_edges[j].append((i, j))
+            outgoing_edges[i].append((i, j))
+            uv_to_edges[(i[0], j[0])].append((i, j))
+       
         # Constraint (6j)(6l): Flow conservation
         for node in self.G_graph:
             if node[0] > 0:
-                incoming_flow = gp.quicksum(self.z[j, i] for j, i in self.E_graph if i == node)
-                outgoing_flow = gp.quicksum(self.z[i, j] for i, j in self.E_graph if i == node)
+                incoming_flow = gp.quicksum(self.z[edge] for edge in incoming_edges[node])
+                outgoing_flow = gp.quicksum(self.z[edge] for edge in outgoing_edges[node])
                 self.model.addConstr(incoming_flow == outgoing_flow, name=f"{self.type}_flow_conservation_{node}")
 
         # Constraint (6k)(6m): Consistency between z^D and x
         for edge in self.x.keys():  # Use x from mainClass
             u, v = edge
-            z_edges = gp.quicksum(
-                self.z[i, j] for i, j in self.E_graph if i[0] == u and j[0] == v
-            )
+            z_edges = gp.quicksum(self.z[i, j] for i, j in uv_to_edges[(u, v)])
             self.model.addConstr(self.x[u, v] == z_edges, name=f"xz_{self.type}_consistency_{u}_{v}")
 
     def run_flow_graph(self):
