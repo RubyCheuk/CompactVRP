@@ -11,15 +11,16 @@ from VRPTWSolver import VRPTWSolver  # Assuming the class is saved in a file nam
 from FlowGraphCapacity import FlowGraphCapacityTime
 from LocalAreaArcs import LocalAreaArcs
 import ast, time
+from gurobipy import GRB
+from Util import customers_need_update
 
 class VRPTWSolverAlgo(VRPTWSolver):
     """Solver for the MILP model in Section 4.3."""
-    def __init__(self, instance, N_u, WD_u, WT_u, var_basis, con_basis, lp_relaxation=True):
+    def __init__(self, instance, N_u, WD_u, WT_u, var_basis, con_basis):
         super().__init__(instance)  # Inherit initialization from VRPTWSolver
         self.N_u = N_u
         self.WD_u = WD_u
         self.WT_u = WT_u
-        self.lp_relaxation = lp_relaxation
         self.local_area_movement = None
         self.E_star_neighbor_u = {}
         self.E_star_neighbor_uw = {}
@@ -39,7 +40,7 @@ class VRPTWSolverAlgo(VRPTWSolver):
         """Override to add constraints specific to Section 4.3."""
         super().setup_constraints()  # Retain base class constraints
         self.add_capacity_time_discretization_constraints()  
-        self.add_LA_arc_constraints()
+        self.lam = self.add_LA_arc_constraints(update=False)
         """ 
         self.model.addConstr(
             #(self.x[2,6] + self.x[6,7] + self.x[7,8] + self.x[8,5] + self.x[5,3] + self.x[3,1] + self.x[1,4] == 7),
@@ -47,7 +48,52 @@ class VRPTWSolverAlgo(VRPTWSolver):
             name="enforce"
         ) """
 
-    def add_LA_arc_constraints(self):
+    def update(self, N_u, WD_u, WT_u):
+        """
+        Update parameters and make necessary changes to the model.
+        """
+        #update_z_list = set(customers_need_update(self.WD_u, WD_u) + customers_need_update(self.WT_u, WT_u))
+        
+        self.N_u = N_u
+        self.WD_u = WD_u
+        self.WT_u = WT_u
+        affected_customers_LA = self.lam.get_affected_customers(self.N_u)
+        self.lam.update_constraints_parsimony(affected_customers_LA)
+        #print ('----update-cleanup_z-add_capacity_time_discretization_constraints')
+        
+        self.cleanup_z()
+        self.add_capacity_time_discretization_constraints()
+
+    def cleanup_z(self):
+        """
+        Remove all declared variables and constraints based on their names.
+        Variables and constraints are identified using their naming conventions.
+        """
+        # Remove variables based on their prefix
+        variable_prefixes = ["z_D", "z_T"]  # Variable prefixes for self.z
+        for var in self.model.getVars():
+            if any(var.varName.startswith(prefix) for prefix in variable_prefixes):
+                self.model.remove(var)
+                #print(f"Removed variable: {var.varName}")
+
+        # Remove constraints based on their naming conventions
+        constraint_prefixes = [
+            "capacity_flow_conservation_",
+            "time_flow_conservation_",
+            "xz_capacity_consistency_",
+            "xz_time_consistency_"
+        ]
+
+        for constr in self.model.getConstrs():
+            if any(constr.ConstrName.startswith(prefix) for prefix in constraint_prefixes):
+                self.model.remove(constr)
+                #print(f"Removed constraint: {constr.ConstrName}")
+
+        # Update the model to reflect changes
+        self.model.update()
+        print("All declared variables and constraints have been removed.")
+
+    def add_LA_arc_constraints(self, update=True):
         # Add Local Area Movement constraints for each u
         lam = LocalAreaArcs(self.model, self.instance, self.E_star, self.N_u, self.x)
         lam.compute_local_area_arcs()  # Compute LA arcs for u
@@ -63,8 +109,10 @@ class VRPTWSolverAlgo(VRPTWSolver):
         """
         # Generate the indicators
         lam.generate_ordering_indicators()
-        lam.add_variables()
-        lam.add_constraints_parsimony()
+        lam.add_variables()   
+        lam.add_constraints_parsimony()       
+
+        return lam
         
     def setup_objective(self):
         """Override the objective function if needed."""
@@ -136,13 +184,16 @@ class VRPTWSolverAlgo(VRPTWSolver):
 
             # Process linking_xwv_inner_y_u constraints
             if c.ConstrName.startswith('linking_xwv_inner_y_u'):
-                # Parse constraint name
-                name_parts = c.ConstrName.split('linking_xwv_inner_y_u')[1]
-                u_str, kwv_str = name_parts.split('[')
-                u = int(u_str)
-                k, w, v = map(int, kwv_str.rstrip(']').split(','))
                 # Only consider positive dual variables
                 if c.Pi > 0:
+                    print ('----positive c.Pi: ', c.ConstrName, c.Pi)
+                    
+                    # Parse constraint name
+                    name_parts = c.ConstrName.split('linking_xwv_inner_y_u')[1]
+                    u_str, kwv_str = name_parts.split('[')
+                    u = int(u_str)
+                    k, w, v = map(int, kwv_str.rstrip(']').split(','))
+                    
                     if u not in dual_sums:
                         dual_sums[u] = {}
                     if k not in dual_sums[u]:
@@ -151,14 +202,16 @@ class VRPTWSolverAlgo(VRPTWSolver):
 
             # Process linking_xwv_outer_y_u constraints
             elif c.ConstrName.startswith('linking_xwv_outer_y_u'):
-                # Parse constraint name
-                name_parts = c.ConstrName.split('linking_xwv_outer_y_u')[1]
-                u_str, kw_str = name_parts.split('[')
-                u = int(u_str)
-                k, w = map(int, kw_str.rstrip(']').split(','))
-
                 # Only consider positive dual variables
                 if c.Pi > 0:
+                    print ('----positive c.Pi: ', c.ConstrName, c.Pi)
+
+                    # Parse constraint name
+                    name_parts = c.ConstrName.split('linking_xwv_outer_y_u')[1]
+                    u_str, kw_str = name_parts.split('[')
+                    u = int(u_str)
+                    k, w = map(int, kw_str.rstrip(']').split(','))
+
                     if u not in dual_sums:
                         dual_sums[u] = {}
                     if k not in dual_sums[u]:
@@ -193,8 +246,8 @@ class VRPTWSolverAlgo(VRPTWSolver):
                     d_min_next = node_next[1]
 
                     # Ensure the pair exists in the graph
-                    if (node_current, node_next) not in edge_set:
-                        continue
+                    #if (node_current, node_next) not in edge_set:
+                        #continue
                     if d_max_current + step_size == d_min_next:
                         # Remove d_max_i from self.WD_u[u] if present
                         if d_max_current in customer_data:
@@ -279,14 +332,26 @@ class VRPTWSolverAlgo(VRPTWSolver):
         self.model.write("vrptw_lp_relaxation.lp")
         print ("Model has been created.")
 
-    def solve(self):    
+    def solve(self, relaxation=True):    
         """Solve the VRPTW model."""
         self.model.setParam('TimeLimit', 1000)  # Set the time limit to 300 seconds (5 minutes)
-        if self.lp_relaxation:
+        if relaxation:
             self.model = self.model.relax()
             self.model.setParam('OutputFlag', 0)    # Disable gurobi output
         else:
-            if True:    # Use the basis from the previous iteration to accelerate the solving process
+            # Assume var_name is the name of the variable to be enforced as binary
+            # Iterate through all variables in the model
+            self.model.setParam('OutputFlag', 1)
+            for variable in self.model.getVars():
+                # Check if the variable name starts with 'x' or 'y'
+                if variable.varName.startswith('x') or variable.varName.startswith('y'):
+                    variable.vType = GRB.BINARY  # Set the variable type to binary
+
+            # Update the model to apply the changes
+            self.model.update()
+
+            '''
+            if False:    # Use the basis from the previous iteration to accelerate the solving process
                 start_time = time.time()
                 if self.var_basis and self.con_basis:
                     # Set the basis status for variables
@@ -301,19 +366,20 @@ class VRPTWSolverAlgo(VRPTWSolver):
                         if constr_name in constr_dict:
                             constr_dict[constr_name].cBasis = basis
                 end_time = time.time()  # End time
-                print(f"-----start_with_basis-----Runtime: {end_time - start_time:.4f} seconds")
+                print(f"-----start_with_basis-----Runtime: {end_time - start_time:.4f} seconds")'''
 
         self.model.optimize()
         self.solve_status()
 
-        if self.lp_relaxation:
+        if relaxation:
             """ Get the dual variables for parameter expansion. """
             self.capacity_pi = self.fetch_duals_capacity_time()
             self.time_pi = self.fetch_duals_capacity_time('time')
             self.LA_pi = self.store_positive_duals_for_ku()
-            if True:    # Save variable and constraint basis from the previous model
+            '''
+            if False:    # Save variable and constraint basis from the previous model
                 start_time = time.time()
                 self.variable_basis = {var.varName: var.vBasis for var in self.model.getVars()}
                 self.constraint_basis = {constr.ConstrName: constr.cBasis for constr in self.model.getConstrs()}
                 end_time = time.time()  # End time
-                print(f"-----save_basis-----Runtime: {end_time - start_time:.4f} seconds")
+                print(f"-----save_basis-----Runtime: {end_time - start_time:.4f} seconds")'''

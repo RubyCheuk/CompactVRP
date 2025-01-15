@@ -135,7 +135,8 @@ class FlowGraphCapacityTime():
         self.z = self.model.addVars(
             self.E_graph, lb=0, vtype=GRB.CONTINUOUS, name=prefix
         )
-
+        self.model.update()
+        
     def setup_constraints(self):
         """
         Add constraints (4a) and (4b).
@@ -161,7 +162,10 @@ class FlowGraphCapacityTime():
         for edge in self.x.keys():  # Use x from mainClass
             u, v = edge
             z_edges = gp.quicksum(self.z[i, j] for i, j in uv_to_edges[(u, v)])
-            self.model.addConstr(self.x[u, v] == z_edges, name=f"xz_{self.type}_consistency_{u}_{v}")
+            self.model.addConstr(self.model.getVarByName(self.x[u,v].varName) == z_edges, name=f"xz_{self.type}_consistency_{u}_{v}")
+            #self.model.addConstr(self.x[u,v] == z_edges, name=f"xz_{self.type}_consistency_{u}_{v}")
+        
+        self.model.update()
 
     def run_flow_graph(self):
         """ Create the graph and edges based on the discretization buckets. Then create variables zD, zT and add constraints. """

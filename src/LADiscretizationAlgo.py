@@ -6,9 +6,9 @@ Description:
     Implementation of Algorithm 1, LA-Discretization Algorithm, in Section 5.3 of the paper
 """
 
-from Util import calculate_neighbors
+from Util import calculate_neighbors, compare_dicts
 from VRPTWSolverAlgo import VRPTWSolverAlgo
-import time
+import time, copy
 
 class LADiscretization:
     def __init__(self, instance, ns=6, ds=5, ts=50, min_inc=1, iter_max=10, zeta=9):
@@ -65,20 +65,28 @@ class LADiscretization:
         Line 8: Solve the current LP relaxation and update the parameterization. relaxation = True.
         Line 21: Solve the current LP relaxation and update the parameterization. relaxation = False.
         """
-        solver = VRPTWSolverAlgo(self.instance, self.N_u, self.WD_u, self.WT_u, self.variable_basis, self.constraint_basis, relaxation)
-        start_time = time.time()
-        solver.create_model()
-        end_time = time.time()  # End time
-        print(f"-----create_model-----Runtime: {end_time - start_time:.4f} seconds")
-        solver.solve()
+        
+        if self.total_iters == 0:
+            start_time = time.time()
+            self.solver = VRPTWSolverAlgo(self.instance, self.N_u, self.WD_u, self.WT_u, self.variable_basis, self.constraint_basis)
+            self.solver.create_model()
+            end_time = time.time()  # End time
+            print(f"-----create_model-----Runtime: {end_time - start_time:.4f} seconds")
+        else:
+            start_time = time.time()
+            self.solver.update(self.N_u, self.WD_u, self.WT_u)
+            end_time = time.time()  # End time
+            print(f"-----update_model-----Runtime: {end_time - start_time:.4f} seconds")
+
+        self.solver.solve(relaxation)
         start_time = time.time()
         print(f"-----solve_model-----Runtime: {-end_time + start_time:.4f} seconds")
-        lp_objective = solver.model.ObjVal
-        mip_dual_bound = solver.model.ObjBound   # To get the MIP dual bound of the MILP? TODO: need to further check if the usage is correct.
+        lp_objective = self.solver.model.ObjVal
+        mip_dual_bound = self.solver.model.ObjBound   # To get the MIP dual bound of the MILP? TODO: need to further check if the usage is correct.
 
         # Get the solve time
-        solve_time = solver.model.Runtime  
-        return lp_objective, solve_time, solver, mip_dual_bound, getattr(solver, "variable_basis", None), getattr(solver, "constraint_basis", None)
+        solve_time = self.solver.model.Runtime  
+        return lp_objective, solve_time, self.solver, mip_dual_bound, getattr(self.solver, "variable_basis", None), getattr(self.solver, "constraint_basis", None)
 
     def contract_parameters(self, solver):
         """
@@ -96,16 +104,24 @@ class LADiscretization:
                 self.N_u[u] = self.N_u[u][:largest_k]
             else:
                 # If u does not exist in LA_pi, set self.N_u[u] as an empty list
-                self.N_u[u] = []
+                self.N_u[u] = self.N_u[u][:1]
         end_time = time.time()  # End time
         print(f"------contract_parameters_LAarcs-----Runtime: {end_time - start_time:.4f} seconds")
 
-        # Apply contraction logic for WD_u, WT_u in Section 5.1.
+
+        '''Apply contraction logic for WD_u, WT_u in Section 5.1.'''
+        #print ('----self.WD_u----: ', { u: len(self.WD_u[u]) for u in self.WD_u})
         solver.post_process_duals(solver.capacity_pi)
+        self.WD_u = copy.deepcopy(solver.WD_u)
+        #print ('----self.WD_u----: ', { u: len(self.WD_u[u]) for u in self.WD_u})
         start_time = time.time()  # End time
         print(f"------contract_parameters_cap-----Runtime: {-end_time + start_time:.4f} seconds")
+
+        #print ('----self.WT_u----: ', { u: len(self.WT_u[u]) for u in self.WT_u})
         solver.post_process_duals(solver.time_pi, 'time')
         end_time = time.time()  # End time
+        self.WT_u = copy.deepcopy(solver.WT_u)
+        #print ('----self.WT_u----: ', { u: len(self.WT_u[u]) for u in self.WT_u})
         print(f"------contract_parameters_time-----Runtime: {end_time - start_time:.4f} seconds")
 
     def expand_parameters(self, lp_solver):
@@ -114,6 +130,11 @@ class LADiscretization:
         self.expand_parameters_capacity_time(lp_solver, "capacity")
         # Line 16 in Algorithm 1
         self.expand_parameters_capacity_time(lp_solver, "time")
+
+    def expand_parameters_LA(self):
+        for u in range(1, self.instance.num_customers + 1):
+            self.N_u[u] = calculate_neighbors(self.instance, self.ns, u)
+
 
     def expand_parameters_capacity_time(self, lp_solver, type="capacity"):
         """Expand parameters (time/capacity buckets) for sufficiency. Use the same function for capacity and time. """
@@ -128,26 +149,28 @@ class LADiscretization:
                 for value in new_W_u[u]:
                     if value not in target_dict[u]:  # Check if value is not in the target dictionary
                         target_dict[u].append(value)  # Add the value if it doesn't exist
-                        self.is_parameterized_unchanged = False # parameterized has been changed
+                        #self.is_parameterized_unchanged = False # parameterized has been changed
                 target_dict[u].sort()  # Sort the list in ascending order
             else:
                 # If `u` is not in the target dictionary, initialize it with the sorted values from `new_W_u[u]`
                 target_dict[u] = sorted(new_W_u[u])
-                self.is_parameterized_unchanged = False # parameterized has been changed
+                #self.is_parameterized_unchanged = False # parameterized has been changed
 
     def run(self):
         """Execute Algorithm 1: LA-Discretization algorithm."""
 
         self.lp_time = 0
         self.total_iters = 0
+        self.is_parameterized_unchanged = True
         while True:
-            self.is_parameterized_unchanged = True
+            tmp_N_u = self.N_u.copy()
+            tmp_WD_u = self.WD_u.copy()
+            tmp_WT_u = self.WT_u.copy()            
 
             # Line 5-7
             if self.iter_since_reset >= self.zeta:
-                for u in range(1, self.instance.num_customers + 1):
-                    self.N_u[u] = calculate_neighbors(self.instance, self.ns, u)
-                self.is_parameterized_unchanged = False
+                self.expand_parameters_LA()
+                #self.is_parameterized_unchanged = False
 
             # Line 8: given N_u, T_u, D_u for all u \in N, solve the LP relaxation and get [z, y, x, pi, lp_objective]
             lp_objective, lp_time, lp_solver, _, self.variable_basis, self.constraint_basis = self.solve_lp_relaxation()
@@ -163,16 +186,20 @@ class LADiscretization:
                 self.contract_parameters(lp_solver)
                 self.last_lp_val = lp_objective
                 self.iter_since_reset = 0
-                self.is_parameterized_unchanged = False
+                #self.is_parameterized_unchanged = False
 
             # Lines 16-17: Expand parameters for sufficiency
             self.expand_parameters(lp_solver)
-            
+
             self.iter_since_reset += 1
+            self.is_parameterized_unchanged = compare_dicts(tmp_N_u, self.N_u) and compare_dicts(tmp_WD_u, self.WD_u) and compare_dicts(tmp_WT_u, self.WT_u)
+            if self.is_parameterized_unchanged:
+                self.expand_parameters_LA()
+                self.is_parameterized_unchanged = compare_dicts(tmp_N_u, self.N_u)
 
             # Line 19: Termination conditions 
             print ('-----is_parameterized_unchanged-------', self.is_parameterized_unchanged)
-            if self.iter_since_reset > self.iter_max or self.is_parameterized_unchanged:
+            if self.iter_since_reset > self.iter_max or (self.is_parameterized_unchanged and self.iter_since_reset > 3):
                 break
 
         # Line 20:

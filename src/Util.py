@@ -85,3 +85,66 @@ def print_comparison_table(file_path, baseline_results, compact_results):
 
     # Print the table
     print(tabulate(data, headers=headers, tablefmt="github"))
+
+
+def compare_dicts(dict1, dict2):
+    """
+    Compare two dictionaries and return True if they are exactly the same, including nested dictionaries.
+
+    Args:
+        dict1 (dict): The first dictionary.
+        dict2 (dict): The second dictionary.
+
+    Returns:
+        bool: True if the dictionaries are exactly the same, False otherwise.
+    """
+
+    # Check if both are dictionaries
+    if not isinstance(dict1, dict) or not isinstance(dict2, dict):
+        return False
+
+    # Compare keys
+    if set(dict1.keys()) != set(dict2.keys()):
+        return False
+
+    # Compare values
+    for key in dict1:
+        value1 = dict1[key]
+        value2 = dict2[key]
+
+        if isinstance(value1, dict) and isinstance(value2, dict):
+            # Recursively compare nested dictionaries
+            if not compare_dicts(value1, value2):
+                return False
+        elif value1 != value2:
+            # Compare other types of values
+            return False
+
+    return True
+
+def customers_need_update(old_dict, new_dict):
+    """
+    Compare two dictionaries where values are lists, and return a list of keys
+    whose list values are different.
+
+    Args:
+        old_dict (dict): The first dictionary to compare.
+        new_dict (dict): The second dictionary to compare.
+
+    Returns:
+        list: A list of keys (`u`) whose list values differ between the dictionaries.
+    """
+    differing_keys = []
+
+    # Get the union of keys from both dictionaries
+    all_keys = set(old_dict.keys()).union(set(new_dict.keys()))
+
+    for key in all_keys:
+        old_value = old_dict.get(key, None)
+        new_value = new_dict.get(key, None)
+
+        # Check if one of the values is None or the lists are different
+        if old_value != new_value:
+            differing_keys.append(key)
+
+    return differing_keys

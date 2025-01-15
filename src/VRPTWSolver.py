@@ -54,7 +54,7 @@ class VRPTWSolver:
         num_customers = self.instance.num_customers
         self.E_star = [
             (u, v) for u in range(num_customers + 1) for v in [x for x in range(-1, num_customers + 1) if x != 0]
-            if u != v
+            if u != v and u + v >= 0
             and self.is_feasible(u, v)
         ]
 

@@ -448,17 +448,20 @@ class LocalAreaArcs:
         return list(E_star_neighbor), E_star_neighbor_uw
 
     def add_variables(self):
+        self.y = {}  # Initialize a dictionary to store variables for all customers
+
         for u in range(1, self.instance.num_customers + 1):
             r_names = ["_".join(map(str, r)) for r in self.R_u[u]]
 
             # Add all variables at once
-            self.y = self.model.addVars(
+            self.y[u] = self.model.addVars(
                 r_names, lb=0, vtype=GRB.BINARY, name=f"y_u{u}"
             )
 
     """ functions add_constraints() and add_constraints() are replaced by Constraints (8) and not in use. """
+    """ 
     def add_constraints(self):
-        """ Add constraints (6g), (6h), and (6i) for a specific customer u.  """
+        # Add constraints (6g), (6h), and (6i) for a specific customer u. 
         for u in range(1, self.instance.num_customers + 1):
             self.add_constraints_u(u)
 
@@ -493,32 +496,36 @@ class LocalAreaArcs:
             ),
             name=f"linking_xwv_outer_y_u{u}"
         )
+        """
 
     """ Constraints 8 in use in the algorithm. """
     def add_constraints_parsimony(self):
-        for u in range(1, self.instance.num_customers + 1):
-            self.add_constraints_parsimony_u(u)
-
-    def add_constraints_parsimony_u(self, u):
         """
         Add constraints (6g), (8a), and (8b) for a specific customer u.
+        """
+        for u in range(1, self.instance.num_customers + 1):
+            # Constraint (6g): LA-arc movement consistency for u
+            self.model.addConstr(
+                gp.quicksum(self.y[u][r] for r in self.y[u]) == 1,
+                name=f"LA_arc_one_ordering_u{u}"
+            )
+
+            self.add_constraints_parsimony_u(u, range(1, self.LA_neighbor_size[u]+1))
+
+    def add_constraints_parsimony_u(self, u, k_range):
+        """
+        Add constraints (8a), and (8b) for a specific customer u.
 
         Args:
             u: The specific customer for which constraints are added.
         """
-        # Constraint (6g): LA-arc movement consistency for u
-        self.model.addConstr(
-            gp.quicksum(self.y[r] for r in self.y) == 1,
-            name=f"LA_arc_one_ordering_u{u}"
-        )
-
         # Constraint (8a): Linking x_wv with y_r for u
         self.model.addConstrs(
             (
                 self.tiny_val * k + self.x[w, v] >= gp.quicksum(
-                    self.ak_wvr[u][k][(w, v, r)] * self.y[r] for r in self.y if (w, v, r) in self.ak_wvr[u][k]
+                    self.ak_wvr[u][k][(w, v, r)] * self.y[u][r] for r in self.y[u] if (w, v, r) in self.ak_wvr[u][k]
                 )
-                for k in range(1, self.LA_neighbor_size[u]+1)
+                for k in k_range
                 for w, v in self.E_star_neighbor[u] if (v in self.N_u[u][:k] and w in self.N_u[u][:k] + [u])
             ),
             name=f"linking_xwv_inner_y_u{u}"
@@ -531,10 +538,79 @@ class LocalAreaArcs:
                     self.x[w, v] #for v in range(1, self.instance.num_customers + 1) if v not in self.N_u[u]
                     for w,v in self.E_star_neighbor_uw[u][outer_w] if (v not in self.N_u[u][:k])
                 ) >= gp.quicksum(
-                    self.ak_w_star_r[u][k].get((outer_w, r), 0) * self.y[r] for r in self.y
+                    self.ak_w_star_r[u][k].get((outer_w, r), 0) * self.y[u][r] for r in self.y[u]
                 )
-                for k in range(1, self.LA_neighbor_size[u]+1)
+                for k in k_range
                 for outer_w in self.E_star_neighbor_uw[u] if outer_w in self.N_u[u][:k] 
             ),
             name=f"linking_xwv_outer_y_u{u}"    # TODO: k = 0? i.e., w = u?
         )
+
+    def get_affected_customers(self, N_u):
+        """
+        Identify customers whose `LA_neighbor_size` does not match the length of `N_u`.
+        Updates `self.LA_neighbor_size` to reflect the new lengths of `N_u`.
+
+        Returns:
+            dict: A dictionary of affected customers where the key is the customer index `u`
+                and the value is a tuple `(len(N_u[u]), self.LA_neighbor_size[u])`.
+        """
+        affected_customers = {}
+
+        for u in range(1, self.instance.num_customers + 1):
+            current_size = len(N_u[u])
+            if current_size != self.LA_neighbor_size[u]:
+                # Add the difference to the affected customers
+                affected_customers[u] = (self.LA_neighbor_size[u], current_size)
+
+                # Update self.LA_neighbor_size[u] to match the current size
+                self.LA_neighbor_size[u] = current_size
+
+        return affected_customers
+
+    def update_constraints_parsimony(self, affected_customers):
+        """
+        Dynamically update constraints (6g), (8a), and (8b) for customers `u`
+        in `affected_customers` based on the difference between `old_k` and `new_k`.
+
+        Args:
+            affected_customers (dict): A dictionary where the key is the customer `u` and
+                                    the value is a tuple `(old_k, new_k)`, indicating the
+                                    difference between the old and new `k` values.
+        """
+        def add_constraints(u, k_range):
+            """
+            Add constraints (8a) and (8b) for a given customer `u` and range of `k` values.
+
+            Args:
+                u (int): The customer index.
+                k_range (iterable): The range of `k` values to consider.
+            """
+            self.add_constraints_parsimony_u(u, k_range)
+
+        def remove_constraints(u, k_range, prefix):
+            for k in k_range:
+                # Iterate through all constraints in the model
+                for constr in self.model.getConstrs():
+                    constr_name = constr.ConstrName
+                    if constr_name.startswith(f"{prefix}{u}[{k}"):
+                        self.model.remove(constr)
+                        #print(f"Removed constraint: {constr_name}")
+
+                        
+        # Process each affected customer
+        for u, (old_k, new_k) in affected_customers.items():
+            if old_k < new_k:
+                # Add constraints for k = old_k + 1 to new_k
+                add_constraints(u, range(old_k + 1, new_k + 1))
+            elif old_k > new_k:
+                # Remove constraints for k = new_k + 1 to old_k
+                remove_constraints(u, range(new_k + 1, old_k + 1), prefix="linking_xwv_inner_y_u")
+                # Example usage for linking_xwv_outer constraints
+                remove_constraints(u, range(new_k + 1, old_k + 1), prefix="linking_xwv_outer_y_u")
+
+        # Update the model to reflect changes
+        self.model.update()
+        #print(f"LA Constraints updated for affected customers: {affected_customers}")
+
+
