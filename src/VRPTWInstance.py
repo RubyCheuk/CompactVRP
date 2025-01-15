@@ -22,7 +22,8 @@ class VRPTWInstance:
     def compute_distance(self, node1, node2):
         """Calculate the Euclidean distance between two nodes."""
         # TODO: move to Util.py
-        return math.sqrt((node1['x'] - node2['x'])**2 + (node1['y'] - node2['y'])**2)    
+        distance = math.sqrt((node1['x'] - node2['x'])**2 + (node1['y'] - node2['y'])**2)    
+        return math.floor(distance * 10) / 10
 
     def __str__(self):
         """Provide a readable string representation of the VRPTWInstance object."""

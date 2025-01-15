@@ -37,7 +37,7 @@ def calculate_neighbors(instance, k_neighbors, u):
     # Select the top-k neighbors
     return [v for v, _ in neighbors[:k_neighbors]]
 
-def safe_round(value, precision=4):
+def safe_round(value, precision=1):
     if isinstance(value, (int, float)):
         return round(value, precision)
     return value  # Return as-is if not numeric
@@ -84,7 +84,7 @@ def print_comparison_table(file_path, baseline_results, compact_results):
     headers = ["file num", "approach", "lp obj", "mip dual bound",  "ILP obj", "ilp time", "total lp time", "total run time"]
 
     # Print the table
-    print(tabulate(data, headers=headers, tablefmt="github"))
+    print(tabulate(data, headers=headers, tablefmt="github", floatfmt=".1f"))
 
 
 def compare_dicts(dict1, dict2):
